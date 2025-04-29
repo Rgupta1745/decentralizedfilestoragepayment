@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.17;
+
+/**
+ * @title DecentralizedFileStorage
+ * @dev Smart contract for managing payments for decentralized file storage
+ */
+contract DecentralizedFileStorage {
+    address public owner;
+    
+    // Define storage provider struct
+    struct StorageProvider {
+        bool isRegistered;
+        uint256 storagePrice; // Price per GB per month in wei
+        uint256 totalEarnings;
+    }
+    
+    // Define storage request struct
+    struct StorageRequest {
+        address user;
+        address provider;
+        uint256 sizeInGB;
+        uint256 durationInMonths;
+        uint256 totalPayment;
+        bool isActive;
+        uint256 timestamp;
+    }
+    
+    // Mapping of storage providers
+    mapping(address => StorageProvider) public providers;
+    
+    // Mapping of storage requests by requestId
+    mapping(uint256 => StorageRequest) public requests;
+    uint256 public nextRequestId;
+    
+    // Events
+    event ProviderRegistered(address indexed provider, uint256 pricePerGB);
+    event StorageRequested(uint256 indexed requestId, address indexed user, address indexed provider, uint256 sizeInGB, uint256 durationInMonths);
+    event StorageConfirmed(uint256 indexed requestId, address indexed provider);
+    
+    // Modifiers
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can call this function");
+        _;
+    }
+    
+    modifier onlyProvider() {
+        require(providers[msg.sender].isRegistered, "Only registered providers can call this function");
+        _;
+    }
+    
+    /**
+     * @dev Constructor
+     */
+    constructor() {
+        owner = msg.sender;
+        nextRequestId = 1;
+    }
+    
+    /**
+     * @dev Register as a storage provider or update price
+     * @param _pricePerGB Price per GB per month in wei
+     */
+    function registerProvider(uint256 _pricePerGB) external {
+        require(_pricePerGB > 0, "Price must be greater than 0");
+        
+        providers[msg.sender].isRegistered = true;
+        providers[msg.sender].storagePrice = _pricePerGB;
+        
+        emit ProviderRegistered(msg.sender, _pricePerGB);
+    }
+    
+    /**
+     * @dev Request storage from a provider
+     * @param _provider Address of the storage provider
+     * @param _sizeInGB Size of storage in GB
+     * @param _durationInMonths Duration of storage in months
+     */
+    function requestStorage(address _provider, uint256 _sizeInGB, uint256 _durationInMonths) external payable {
+        require(providers[_provider].isRegistered, "Provider not registered");
+        require(_sizeInGB > 0, "Size must be greater than 0");
+        require(_durationInMonths > 0, "Duration must be greater than 0");
+        
+        uint256 totalPayment = providers[_provider].storagePrice * _sizeInGB * _durationInMonths;
+        require(msg.value >= totalPayment, "Insufficient payment");
+        
+        // Create storage request
+        uint256 requestId = nextRequestId;
+        requests[requestId] = StorageRequest({
+            user: msg.sender,
+            provider: _provider,
+            sizeInGB: _sizeInGB,
+            durationInMonths: _durationInMonths,
+            totalPayment: totalPayment,
+            isActive: false,
+            timestamp: block.timestamp
+        });
+        
+        nextRequestId++;
+        
+        emit StorageRequested(requestId, msg.sender, _provider, _sizeInGB, _durationInMonths);
+        
+        // Return excess payment
+        if (msg.value > totalPayment) {
+            payable(msg.sender).transfer(msg.value - totalPayment);
+        }
+    }
+    
+    /**
+     * @dev Confirm storage provision and receive payment
+     * @param _requestId ID of the storage request
+     */
+    function confirmStorage(uint256 _requestId) external onlyProvider {
+        StorageRequest storage request = requests[_requestId];
+        
+        require(request.provider == msg.sender, "Not the requested provider");
+        require(request.totalPayment > 0, "Invalid request");
+        require(!request.isActive, "Storage already confirmed");
+        
+        // Mark request as active
+        request.isActive = true;
+        
+        // Update provider earnings
+        providers[msg.sender].totalEarnings += request.totalPayment;
+        
+        // Transfer payment to provider
+        payable(msg.sender).transfer(request.totalPayment);
+        
+        emit StorageConfirmed(_requestId, msg.sender);
+    }
+}
